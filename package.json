@@ -1,0 +1,40 @@
+{
+  "name": "pi-supervisor",
+  "version": "0.3.0",
+  "description": "A pi extension that supervises the chat and steers it towards a defined outcome",
+  "author": "tintinweb",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tintinweb/pi-supervisor.git"
+  },
+  "homepage": "https://github.com/tintinweb/pi-supervisor#readme",
+  "bugs": {
+    "url": "https://github.com/tintinweb/pi-supervisor/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "supervisor",
+    "steering",
+    "outcome",
+    "agent",
+    "productivity"
+  ],
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "latest",
+    "@mariozechner/pi-tui": "latest",
+    "@mariozechner/pi-ai": "latest",
+    "@sinclair/typebox": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"],
+    "video": "https://github.com/tintinweb/pi-supervisor/raw/master/media/demo.mp4",
+    "image": "https://github.com/tintinweb/pi-supervisor/raw/master/media/screenshot.png"
+  }
+}
