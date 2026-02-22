@@ -6,7 +6,7 @@ A [pi](https://pi.dev) extension that supervises the coding agent and steers it 
 
 > **Status:** Early release.
 
-<img height="298" alt="image" src="https://github.com/tintinweb/pi-manage-todo-list/raw/master/media/screenshot.png" />
+<img height="298" alt="image" src="https://github.com/tintinweb/pi-supervisor/raw/master/media/screenshot.png" />
 
 
 
