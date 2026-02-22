@@ -27,3 +27,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 .temp/
+.pi
+.claude
+.vscode

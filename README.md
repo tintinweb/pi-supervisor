@@ -10,11 +10,13 @@ A [pi](https://pi.dev) extension that supervises the coding agent and steers it 
 /supervise Implement a secure JWT auth system with refresh tokens and full test coverage
 ```
 
-1. **Every turn** — supervisor LLM (separate from the chat model) analyzes the conversation
-2. **On drift** — injects a short steering message as a follow-up user message
-3. **On completion** — notifies you and stops automatically
+Then start the conversation normally — the supervisor watches from outside without modifying the agent's context.
 
-The supervisor runs invisibly in a separate in-memory pi session using the same API credentials as the main chat. It never interrupts mid-turn; it waits for the agent to finish, then nudges if needed.
+1. **After each run** — a separate supervisor LLM analyzes the conversation against the goal (all sensitivities)
+2. **Mid-run, between tool calls** — also checks for drift on `medium` and `high` sensitivity and can steer the agent without waiting for it to finish
+3. **On completion** — supervisor signals done and stops automatically
+
+The supervisor is a pure outside observer. It runs in a separate in-memory pi session sharing only the API credentials and never touches the main agent's context window or system prompt.
 
 ## Install
 
@@ -34,10 +36,11 @@ pi -e ~/projects/pi-supervisor/src/index.ts
 |---|---|
 | `/supervise <outcome>` | Start supervising toward a desired outcome |
 | `/supervise stop` | Stop active supervision |
-| `/supervise status` | Show current outcome, model, intervention history |
+| `/supervise status` | Show current outcome, model, sensitivity, and intervention history |
+| `/supervise widget` | Toggle the status widget on/off |
 | `/supervise model` | Open the interactive model picker |
 | `/supervise model <provider/modelId>` | Set supervisor model directly |
-| `/supervise sensitivity <low\|medium\|high>` | Adjust how aggressively to steer |
+| `/supervise sensitivity <low\|medium\|high>` | Adjust steering aggressiveness |
 
 ### Examples
 
@@ -53,59 +56,132 @@ pi -e ~/projects/pi-supervisor/src/index.ts
 /supervise stop
 ```
 
+The agent can also initiate supervision itself by calling the `start_supervision` tool — useful when it recognises a task needs goal tracking. Once active, supervision is locked: only the user can change or stop it.
+
 ## UI
 
 **Footer** (always visible while supervising):
 ```
-[SUPERVISING] → "Refactor auth module to use dep…" | claude-haiku-4-5-20251001 | 2 steers
+🎯
 ```
 
-**Widget** (shown by `/supervise status`):
+**Widget** (one line, updated live):
 ```
-[SUPERVISING] anthropic/claude-haiku-4-5-20251001 · 2 steers
-Goal: "Refactor auth module to use dependency injection and ad…"
-Recent steers:
-  · Add error handling to the token refresh path
-  · Don't forget to update the integration tests
+◉ Supervising · Goal: "Refactor auth module…" · claude-haiku · ↗ 2 · ⟳ turn 4
+  The agent has added the DI container but hasn't updated the existing call sites yet…
 ```
+
+The second line shows the supervisor's reasoning as it streams. Toggle the widget with `/supervise widget`.
 
 ## Sensitivity Levels
 
-| Level | Behavior |
-|---|---|
-| `low` | Steer only when seriously off track |
-| `medium` | Steer on mild drift (default) |
-| `high` | Steer proactively, even for minor deviations |
+| Level | When it checks | Confidence threshold | Steering style |
+|---|---|---|---|
+| `low` | End of each run only | — | Only if seriously off track |
+| `medium` (default) | End of run + every 3rd tool cycle mid-run | ≥ 0.90 | On clear drift |
+| `high` | End of run + every tool cycle mid-run | ≥ 0.85 | Proactively |
+
+**End-of-run** (`agent_end`): fires once per user prompt after the agent finishes and goes idle. The supervisor must decide `done`, `steer`, or `continue`.
+
+**Mid-run** (`turn_end`): fires after each LLM tool-call cycle while the agent is still working. Steering is injected immediately (interrupting the current run) only when confidence exceeds the threshold. The agent has at least 2 sub-turns to settle before mid-run checks begin.
 
 ## Supervisor Model
 
-The supervisor runs on a **separate model** from your coding session — it doesn't pollute your agent's context window and can use a cheaper/faster model.
+The supervisor runs on a **separate model** — it can be a cheaper/faster model than the one doing the actual work.
 
-Default: `anthropic/claude-haiku-4-5-20251001`
+**Resolution order:**
+1. Previous session state (persists within a session)
+2. `.pi/supervisor-config.json` in the project root (saved by `/supervise model`)
+3. Active chat model (`ctx.model`) — so it works out of the box with no configuration
+4. Built-in default: `anthropic/claude-haiku-4-5-20251001`
 
-Change it at any time with `/supervise model` (interactive picker) or `/supervise model <provider/id>` (direct). The setting persists for the session.
+Change at any time with `/supervise model` (interactive picker) or `/supervise model <provider/id>` (direct). The selection is saved to `.pi/supervisor-config.json` if the `.pi/` directory exists.
 
-## Customizing the System Prompt
+## Focus and Goal Discipline
 
-The supervisor's behavior is controlled by its system prompt. Discovery order mirrors pi's `SYSTEM.md` convention:
+The supervisor is a pure outside observer — it does not modify the agent's system prompt. Goal discipline is enforced entirely through steering messages when the agent drifts. If the agent asks an out-of-scope clarifying question, the supervisor redirects it back to the goal rather than answering.
 
-| Priority | Location |
-|---|---|
-| 1 | `.pi/SUPERVISOR.md` in project root |
-| 2 | `~/.pi/agent/SUPERVISOR.md` globally |
-| 3 | Built-in template (fallback) |
+## Stagnation Detection
 
-Create `.pi/SUPERVISOR.md` to customize how the supervisor reasons and steers for your project. The file must preserve the JSON response schema so the extension can parse decisions:
+If the supervisor sends **5 consecutive steering messages** without declaring the goal done, it switches to a lenient evaluation mode: if the goal is ≥80% achieved, it declares done rather than looping forever on minor improvements. The threshold is configurable via `MAX_IDLE_STEERS` in `src/index.ts`.
+
+## Customizing the Supervisor: SUPERVISOR.md
+
+The supervisor's reasoning is controlled by its **system prompt** — not the goal. The goal is always set at runtime via `/supervise <outcome>`. `SUPERVISOR.md` defines *how* the supervisor thinks: its rules, persona, and project-specific constraints.
+
+**Discovery order** (mirrors pi's `SYSTEM.md` convention):
+
+| Priority | Location | Use for |
+|---|---|---|
+| 1 | `.pi/SUPERVISOR.md` | Project-specific rules |
+| 2 | `~/.pi/agent/SUPERVISOR.md` | Global personal rules |
+| 3 | Built-in template | Fallback |
+
+The active source is shown when you run `/supervise <outcome>` or `/supervise status`.
+
+### Built-in system prompt
+
+The default prompt the supervisor uses when no `SUPERVISOR.md` is found:
+
+```
+You are a supervisor monitoring a coding AI assistant conversation.
+Your job: ensure the assistant fully achieves a specific outcome without needing the human to intervene.
+
+═══ WHEN THE AGENT IS IDLE (finished its turn, waiting for user input) ═══
+This is your most important moment. The agent has stopped and is waiting.
+You MUST choose "done" or "steer". Never return "continue" when the agent is idle.
+
+- "done"  → only when the outcome is completely and verifiably achieved.
+- "steer" → everything else: incomplete work, partial progress, open questions, waiting for confirmation.
+
+If the agent asked a clarifying question or needs a decision:
+  FIRST check: is this question necessary to achieve the goal?
+  - YES (directly blocks goal progress): answer with a sensible default and tell agent to proceed.
+  - NO (out of scope, nice-to-have, unrelated feature): do NOT answer it. Redirect:
+    "That's outside the scope of the goal. Focus on: [restate the specific missing piece]."
+  DO NOT answer: passwords, credentials, secrets, anything requiring real user knowledge.
+
+Your steer message speaks AS the user. Make it clear, direct, and actionable (1–3 sentences).
+Do not ask the agent to verify its own work — tell it what to do next.
+
+═══ WHEN THE AGENT IS ACTIVELY WORKING (mid-turn) ═══
+Only intervene if it is clearly heading in the wrong direction.
+Trust the agent to complete what it has started. Avoid interrupting productive work.
+
+═══ STEERING RULES ═══
+- Be specific: reference the outcome, missing pieces, or the question being answered.
+- Never repeat a steering message that had no effect — escalate or change approach.
+- A good steer answers the agent's question OR redirects to the missing piece of the outcome.
+- If the agent is taking shortcuts to satisfy the goal without properly achieving it, always steer and remind it not to take shortcuts.
+
+"done" CRITERIA: The core outcome is complete and functional. Minor polish, style tweaks, or
+optional improvements do NOT block "done". Prefer stopping when the goal is substantially
+achieved rather than looping forever chasing perfection.
+
+Respond ONLY with valid JSON — no prose, no markdown fences.
+Response schema (strict JSON):
+{
+  "action": "continue" | "steer" | "done",
+  "message": "...",     // Required when action === "steer"
+  "reasoning": "...",   // Brief internal reasoning
+  "confidence": 0.85    // Float 0-1
+}
+```
+
+### Writing a custom SUPERVISOR.md
+
+You must preserve the JSON response schema. Everything else is up to you.
 
 ```markdown
-You are a supervisor for a TypeScript project. Focus on type safety and test coverage.
+You are a supervisor for a TypeScript project. Your priorities: type safety and test coverage.
 
 Rules:
-- Only steer if the agent skips tests or uses `any` types
-- When steering, be direct: one sentence, specific line/file reference if possible
-- "done" only when tests pass and types are clean
+- Steer if the agent uses `any` types or skips tests for new code
+- When steering, be direct: one sentence max, reference the specific file/function if possible
+- "done" only when the new code has types and tests — not before
+- Do not steer about code style, naming, or documentation
 
-Response schema (strict JSON):
+Response schema (strict JSON, required):
 {
   "action": "continue" | "steer" | "done",
   "message": "...",
@@ -114,23 +190,22 @@ Response schema (strict JSON):
 }
 ```
 
-The active prompt source is shown when you run `/supervise <outcome>` or `/supervise status`.
-
 ## Session Persistence
 
-Supervision state (outcome, model, sensitivity, intervention history) is stored in the pi session file and restored automatically on restart, session switch, and fork.
+Supervision state (outcome, model, sensitivity, intervention history) is stored in the pi session file and restored automatically on restart, session switch, fork, and tree navigation.
 
 ## Project Structure
 
 ```
 src/
-  index.ts              # Extension entry point, event wiring, /supervise command
+  index.ts              # Extension entry point, event wiring, /supervise command, start_supervision tool
   types.ts              # SupervisorState, SteeringDecision, ConversationMessage
   state.ts              # SupervisorStateManager — in-memory state + session persistence
-  engine.ts             # Conversation snapshot, SUPERVISOR.md loading, prompt building
+  engine.ts             # Snapshot building, SUPERVISOR.md loading, prompt construction, analyze()
   model-client.ts       # One-shot supervisor LLM calls via pi's AgentSession API
+  workspace-config.ts   # .pi/supervisor-config.json read/write for model persistence
   ui/
-    status-widget.ts    # Footer status line + widget
+    status-widget.ts    # 🎯 footer badge + one-line widget with live thinking stream
     model-picker.ts     # Interactive model picker using pi's ModelSelectorComponent
 ```
 

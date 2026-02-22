@@ -17,8 +17,8 @@ export interface SupervisorIntervention {
 export interface SupervisorState {
   active: boolean;
   outcome: string;
-  provider: string;      // e.g. "anthropic"
-  modelId: string;       // e.g. "claude-haiku-4-5-20251001"
+  provider: string;          // e.g. "anthropic"
+  modelId: string;           // e.g. "claude-haiku-4-5-20251001"
   sensitivity: Sensitivity;
   interventions: SupervisorIntervention[];
   startedAt: number;

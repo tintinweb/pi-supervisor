@@ -1,10 +1,8 @@
 /**
  * model-client — calls the supervisor LLM using pi's internal agent session API.
  *
- * Creates an ephemeral in-memory AgentSession with no tools and a custom system
- * prompt, sends the analysis request, collects the text response, and disposes
- * the session. This reuses pi's auth, model registry, and retry infrastructure
- * rather than making raw HTTP calls.
+ * callModel        — low-level: returns raw response text
+ * callSupervisorModel — high-level: parses response as SteeringDecision
  */
 
 import {
@@ -16,10 +14,10 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { SteeringDecision } from "./types.js";
 
 /**
- * Run a one-shot supervisor analysis using pi's internal agent session.
- * Returns { action: "continue" } on any failure so the chat is never interrupted.
+ * Run a one-shot LLM call using pi's internal agent session.
+ * Returns the raw response text, or null on failure.
  */
-export async function callSupervisorModel(
+export async function callModel(
   ctx: ExtensionContext,
   provider: string,
   modelId: string,
@@ -27,14 +25,10 @@ export async function callSupervisorModel(
   userPrompt: string,
   signal?: AbortSignal,
   onDelta?: (accumulated: string) => void
-): Promise<SteeringDecision> {
-  // Resolve the model via the shared registry (same auth / API keys as main session)
+): Promise<string | null> {
   const model = ctx.modelRegistry.find(provider, modelId);
-  if (!model) {
-    return safeContinue(`Model not found in registry: ${provider}/${modelId}`);
-  }
+  if (!model) return null;
 
-  // Build a minimal resource loader: no extensions, no skills, custom system prompt
   const loader = new DefaultResourceLoader({
     noExtensions: true,
     noSkills: true,
@@ -50,15 +44,14 @@ export async function callSupervisorModel(
       sessionManager: SessionManager.inMemory(),
       modelRegistry: ctx.modelRegistry,
       model,
-      tools: [],          // supervisor only needs text generation
+      tools: [],
       resourceLoader: loader,
     });
     session = result.session;
-  } catch (err) {
-    return safeContinue(`Failed to create supervisor session: ${String(err)}`);
+  } catch {
+    return null;
   }
 
-  // Wire abort signal → session abort
   const onAbort = () => session.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -75,21 +68,38 @@ export async function callSupervisorModel(
 
   try {
     await session.prompt(userPrompt);
-  } catch (err) {
-    return safeContinue(`Supervisor prompt failed: ${String(err)}`);
+  } catch {
+    return null;
   } finally {
     unsubscribe();
     signal?.removeEventListener("abort", onAbort);
     session.dispose();
   }
 
-  return parseDecision(responseText);
+  return responseText;
+}
+
+/**
+ * Run a one-shot supervisor analysis.
+ * Returns { action: "continue" } on any failure so the chat is never interrupted.
+ */
+export async function callSupervisorModel(
+  ctx: ExtensionContext,
+  provider: string,
+  modelId: string,
+  systemPrompt: string,
+  userPrompt: string,
+  signal?: AbortSignal,
+  onDelta?: (accumulated: string) => void
+): Promise<SteeringDecision> {
+  const text = await callModel(ctx, provider, modelId, systemPrompt, userPrompt, signal, onDelta);
+  if (text === null) return safeContinue("Model call failed");
+  return parseDecision(text);
 }
 
 // ---- Response parsing ----
 
 function parseDecision(text: string): SteeringDecision {
-  // Model may wrap JSON in markdown fences — strip them
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/) ?? text.match(/(\{[\s\S]*\})/);
   const jsonStr = jsonMatch?.[1] ?? text.trim();
 

@@ -34,9 +34,11 @@ You MUST choose "done" or "steer". Never return "continue" when the agent is idl
 - "done"  → only when the outcome is completely and verifiably achieved.
 - "steer" → everything else: incomplete work, partial progress, open questions, waiting for confirmation.
 
-If the agent asked a clarifying question or needs a decision, answer it directly:
-  SAFE to answer on the user's behalf: technical choices, style preferences, "should I also do X",
-  continuation prompts ("shall I proceed?"), reasonable assumptions.
+If the agent asked a clarifying question or needs a decision:
+  FIRST check: is this question necessary to achieve the goal?
+  - YES (directly blocks goal progress): answer with a sensible default and tell agent to proceed.
+  - NO (out of scope, nice-to-have, unrelated feature): do NOT answer it. Redirect:
+    "That's outside the scope of the goal. Focus on: [restate the specific missing piece of the goal]."
   DO NOT answer: passwords, credentials, secrets, anything requiring real user knowledge.
 
 Your steer message speaks AS the user. Make it clear, direct, and actionable (1–3 sentences).
@@ -50,6 +52,7 @@ Trust the agent to complete what it has started. Avoid interrupting productive w
 - Be specific: reference the outcome, missing pieces, or the question being answered.
 - Never repeat a steering message that had no effect — escalate or change approach.
 - A good steer answers the agent's question OR redirects to the missing piece of the outcome.
+- If the agent is taking shortcuts to satisfy the goal without properly achieving it, always steer and remind it not to take shortcuts.
 
 "done" CRITERIA: The core outcome is complete and functional. Minor polish, style tweaks, or
 optional improvements do NOT block "done". Prefer stopping when the goal is substantially
@@ -90,6 +93,20 @@ const MESSAGE_LIMITS: Record<string, number> = {
   high: 20,
 };
 
+/** Extract the most recent compaction or branch summary from the session branch, if any. */
+function extractCompactionSummary(ctx: ExtensionContext): string | null {
+  let summary: string | null = null;
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (
+      (entry.type === "compaction" || entry.type === "branch_summary") &&
+      typeof (entry as any).summary === "string"
+    ) {
+      summary = (entry as any).summary; // keep overwriting — last one wins (most recent)
+    }
+  }
+  return summary;
+}
+
 /** Extract recent user/assistant messages from the session branch. */
 function buildSnapshot(ctx: ExtensionContext, limit: number): ConversationMessage[] {
   const messages: ConversationMessage[] = [];
@@ -101,10 +118,10 @@ function buildSnapshot(ctx: ExtensionContext, limit: number): ConversationMessag
 
     if (msg.role === "user") {
       const content = extractText(msg.content);
-      if (content) messages.push({ role: "user", content: content.slice(0, 2000) });
+      if (content) messages.push({ role: "user", content });
     } else if (msg.role === "assistant") {
       const content = extractAssistantText(msg.content);
-      if (content) messages.push({ role: "assistant", content: content.slice(0, 2000) });
+      if (content) messages.push({ role: "assistant", content });
     }
   }
 
@@ -137,7 +154,8 @@ function buildUserPrompt(
   state: SupervisorState,
   snapshot: ConversationMessage[],
   agentIsIdle: boolean,
-  stagnating: boolean
+  stagnating: boolean,
+  compactionSummary: string | null
 ): string {
   const interventionHistory =
     state.interventions.length === 0
@@ -167,22 +185,28 @@ The agent is making diminishing improvements. Apply a lenient standard:
 - Prefer stopping over looping forever on perfection.`
     : "";
 
+  const summarySection = compactionSummary
+    ? `CONVERSATION SUMMARY (earlier history, before recent messages):\n${compactionSummary}\n\n`
+    : "";
+
   return `DESIRED OUTCOME:
 ${state.outcome}
 
 SENSITIVITY: ${state.sensitivity}
-(low = only steer if seriously off track; medium = steer on mild drift; high = steer proactively)
+(low = check only at end of each run, steer if seriously off track; medium = also check every 3rd tool cycle mid-run, steer on clear drift; high = check every tool cycle, steer proactively)
 
 ${agentStatus}${stagnationWarning}
 
-RECENT CONVERSATION (last ${snapshot.length} messages):
+${summarySection}RECENT CONVERSATION (last ${snapshot.length} messages):
 ${conversationText}
 
 PREVIOUS INTERVENTIONS BY YOU:
 ${interventionHistory}
 
-Analyze the conversation and the agent's current state. Has the outcome been fully achieved?
-Respond with JSON only.`;
+REMINDER — DESIRED OUTCOME:
+${state.outcome}
+
+Has this outcome been fully achieved? Analyze and respond with JSON only.`;
 }
 
 /**
@@ -201,7 +225,8 @@ export async function analyze(
 
   const limit = MESSAGE_LIMITS[state.sensitivity] ?? 12;
   const snapshot = buildSnapshot(ctx, limit);
-  const userPrompt = buildUserPrompt(state, snapshot, agentIsIdle, stagnating);
+  const compactionSummary = extractCompactionSummary(ctx);
+  const userPrompt = buildUserPrompt(state, snapshot, agentIsIdle, stagnating, compactionSummary);
 
   try {
     return await callSupervisorModel(ctx, state.provider, state.modelId, systemPrompt, userPrompt, signal, onDelta);

@@ -64,19 +64,20 @@ export default function (pi: ExtensionAPI) {
     currentCtx = ctx;
   });
 
-  // ---- Mid-turn steering: high sensitivity only ----
+  // ---- Mid-turn steering: medium and high sensitivity ----
   // turn_end fires after each LLM sub-turn (tool-call cycle) while the agent is still running.
-  // We use deliverAs:"steer" to inject a correction mid-run when the agent is clearly off track.
-  // Only fires on high sensitivity; requires high confidence to avoid disrupting productive work.
+  // low:    no mid-run checks at all
+  // medium: check every 3rd tool cycle (turns 2, 5, 8, …), confidence >= 0.9
+  // high:   check every tool cycle from turn 2, confidence >= 0.85
 
   pi.on("turn_end", async (event, ctx) => {
     currentCtx = ctx;
     if (!state.isActive()) return;
     const s = state.getState()!;
 
-    // Mid-turn analysis only on high sensitivity, and only after the agent has made some progress
-    if (s.sensitivity !== "high") return;
-    if (event.turnIndex < 2) return; // give the agent a couple of turns to settle
+    if (s.sensitivity === "low") return;
+    if (event.turnIndex < 2) return; // let the agent settle before intervening
+    if (s.sensitivity === "medium" && (event.turnIndex - 2) % 3 !== 0) return;
 
     let decision;
     try {
@@ -85,8 +86,9 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    // Only interrupt if very confident — mid-turn steering is disruptive
-    if (decision.action === "steer" && decision.message && decision.confidence >= 0.85) {
+    // Higher bar for medium — less willing to disrupt productive work
+    const threshold = s.sensitivity === "medium" ? 0.9 : 0.85;
+    if (decision.action === "steer" && decision.message && decision.confidence >= threshold) {
       state.addIntervention({
         turnCount: s.turnCount,
         message: decision.message,
@@ -98,18 +100,9 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ---- Inject supervisor reminder into system prompt each turn ----
-
-  pi.on("before_agent_start", async (event, _ctx) => {
-    if (!state.isActive()) return;
-    const s = state.getState()!;
-    const reminder =
-      `\n\n[SUPERVISOR ACTIVE — Stay on track]\nDesired outcome: ${s.outcome}\n` +
-      `Sensitivity: ${s.sensitivity}. Focus on the outcome above.`;
-    return { systemPrompt: event.systemPrompt + reminder };
-  });
-
-  // ---- After each agent response: analyze + steer ----
+  // ---- After each agent run: analyze + steer ----
+  // agent_end fires once per user prompt, always with the agent idle and waiting for input.
+  // This is the critical checkpoint for all sensitivity levels.
 
   pi.on("agent_end", async (_event, ctx) => {
     currentCtx = ctx;
@@ -118,21 +111,18 @@ export default function (pi: ExtensionAPI) {
     state.incrementTurnCount();
     const s = state.getState()!;
 
-    // After agent_end the agent is idle and waiting for input — this is the critical moment
-    const agentIsIdle = ctx.isIdle();
-
-    // Stagnation: too many idle steers with no "done" → final lenient evaluation
-    const stagnating = agentIsIdle && idleSteers >= MAX_IDLE_STEERS;
+    // Stagnation: too many steers with no "done" → final lenient evaluation
+    const stagnating = idleSteers >= MAX_IDLE_STEERS;
 
     updateUI(ctx, s, { type: "analyzing", turn: s.turnCount });
 
-    const decision = await analyze(ctx, s, agentIsIdle, stagnating, undefined, (accumulated) => {
+    const decision = await analyze(ctx, s, true /* always idle at agent_end */, stagnating, undefined, (accumulated) => {
       const thinking = extractThinking(accumulated);
       updateUI(ctx, state.getState()!, { type: "analyzing", turn: s.turnCount, thinking });
     });
 
     if (decision.action === "steer" && decision.message) {
-      if (agentIsIdle) idleSteers++;
+      idleSteers++;
       state.addIntervention({
         turnCount: s.turnCount,
         message: decision.message,
@@ -140,7 +130,6 @@ export default function (pi: ExtensionAPI) {
         timestamp: Date.now(),
       });
       updateUI(ctx, state.getState(), { type: "steering", message: decision.message });
-      // agent_end fires when the agent is already idle — plain sendUserMessage triggers a new turn immediately
       pi.sendUserMessage(decision.message);
     } else if (decision.action === "done") {
       idleSteers = 0;
@@ -328,11 +317,6 @@ export default function (pi: ExtensionAPI) {
         `Supervisor active: "${trimmed.slice(0, 50)}${trimmed.length > 50 ? "…" : ""}" | ${provider}/${modelId} | ${promptLabel}`,
         "info"
       );
-
-      // If the agent is idle, send the task as a prompt to kick it off immediately
-      if (ctx.isIdle()) {
-        pi.sendUserMessage(trimmed);
-      }
     },
   });
 
@@ -351,6 +335,20 @@ export default function (pi: ExtensionAPI) {
           "The desired end-state to supervise toward. Be specific and measurable " +
           "(e.g. 'Implement JWT auth with refresh tokens and full test coverage').",
       }),
+      sensitivity: Type.Optional(Type.Union([
+        Type.Literal("low"),
+        Type.Literal("medium"),
+        Type.Literal("high"),
+      ], {
+        description:
+          "How aggressively to steer. low = only when seriously off track, " +
+          "medium = on mild drift (default), high = proactively + mid-turn checks.",
+      })),
+      model: Type.Optional(Type.String({
+        description:
+          "Supervisor model as 'provider/modelId' (e.g. 'anthropic/claude-haiku-4-5-20251001'). " +
+          "Defaults to workspace config, then the active chat model.",
+      })),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       const text = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], details: undefined });
@@ -365,13 +363,25 @@ export default function (pi: ExtensionAPI) {
         );
       }
 
-      // Resolve model: workspace config → active session model → built-in default
-      const workspaceModel = loadWorkspaceModel(ctx.cwd);
-      const sessionModel   = ctx.model;
-      const provider = workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER;
-      const modelId  = workspaceModel?.modelId  ?? sessionModel?.id      ?? DEFAULT_MODEL_ID;
+      // Resolve sensitivity
+      const sensitivity: Sensitivity = params.sensitivity ?? DEFAULT_SENSITIVITY;
 
-      state.start(params.outcome, provider, modelId, DEFAULT_SENSITIVITY);
+      // Resolve model: tool param → workspace config → active session model → built-in default
+      let provider: string;
+      let modelId: string;
+      if (params.model) {
+        const slash = params.model.indexOf("/");
+        provider = slash === -1 ? DEFAULT_PROVIDER : params.model.slice(0, slash);
+        modelId  = slash === -1 ? params.model     : params.model.slice(slash + 1);
+      } else {
+        const workspaceModel = loadWorkspaceModel(ctx.cwd);
+        const sessionModel   = ctx.model;
+        provider = workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER;
+        modelId  = workspaceModel?.modelId  ?? sessionModel?.id      ?? DEFAULT_MODEL_ID;
+      }
+
+      state.start(params.outcome, provider, modelId, sensitivity);
+      idleSteers = 0;
       currentCtx = ctx;
       updateUI(ctx, state.getState());
 
@@ -380,11 +390,11 @@ export default function (pi: ExtensionAPI) {
 
       // Notify the user so they're aware supervision was initiated by the model
       ctx.ui.notify(
-        `Supervisor started by agent: "${params.outcome.slice(0, 60)}${params.outcome.length > 60 ? "…" : ""}" | ${provider}/${modelId} | ${promptLabel}`,
+        `Supervisor started by agent: "${params.outcome.slice(0, 60)}${params.outcome.length > 60 ? "…" : ""}" | ${provider}/${modelId} | sensitivity: ${sensitivity} | ${promptLabel}`,
         "info"
       );
 
-      return text(`Supervision active. Outcome: "${params.outcome}" | ${provider}/${modelId}`);
+      return text(`Supervision active. Outcome: "${params.outcome}" | ${provider}/${modelId} | sensitivity: ${sensitivity}`);
     },
   });
 }
