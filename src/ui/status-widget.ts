@@ -9,6 +9,7 @@
  */
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { truncateToWidth } from "@mariozechner/pi-tui";
 import type { SupervisorState } from "../types.js";
 
 const WIDGET_ID = "supervisor";
@@ -111,7 +112,11 @@ export function updateUI(
       : "";
 
     return {
-      render: () => thinkingLine ? [line, thinkingLine] : [line],
+      render: (width: number) => {
+        const l1 = truncateToWidth(line, width);
+        if (!thinkingLine) return [l1];
+        return [l1, truncateToWidth(thinkingLine, width)];
+      },
       invalidate: () => {},
     };
   });

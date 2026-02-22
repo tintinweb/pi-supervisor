@@ -2,7 +2,15 @@
 
 A [pi](https://pi.dev) extension that supervises the coding agent and steers it toward a defined outcome. It observes every conversation turn, injects guiding messages when the agent drifts, and signals when the goal is reached — like a tech lead watching over a dev's shoulder.
 
+> A supervisor as the intelligent overseer keeping the agent on track.
+
 > **Status:** Early release.
+
+<img height="298" alt="image" src="https://github.com/tintinweb/pi-manage-todo-list/raw/master/media/screenshot.png" />
+
+
+
+https://github.com/user-attachments/assets/f3b23662-6473-4ac3-82f7-c7f9b64fa7c7
 
 ## How It Works
 
