@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-02-22
+
+### Changed
+- Updated `@mariozechner/pi-ai`, `@mariozechner/pi-coding-agent`, and `@mariozechner/pi-tui` to 0.54.1
+
 ## [0.4.0] - 2026-02-22
 
 ### Added
@@ -50,5 +55,6 @@ Initial release of `pi-supervisor`.
 - **Footer status** — always-visible one-liner showing outcome, model, and steer count while supervising
 - **Widget** — shows goal, model, and recent interventions above the editor
 
+[0.4.1]: https://github.com/tintinweb/pi-supervisor/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/tintinweb/pi-supervisor/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tintinweb/pi-supervisor/releases/tag/v0.3.0
