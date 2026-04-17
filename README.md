@@ -1,6 +1,6 @@
 # pi-supervisor
 
-A [pi](https://pi.dev) extension that supervises the coding agent and steers it toward a defined outcome. It observes every conversation turn, injects guiding messages when the agent drifts, and signals when the goal is reached — like a tech lead watching over a dev's shoulder.
+A [pi](https://pi.dev) extension that supervises the coding agent and steers it toward a defined goal. It observes every conversation turn, injects guiding messages when the agent drifts, and signals when the goal is reached — like a tech lead watching over a dev's shoulder.
 
 > A supervisor as the intelligent overseer keeping the agent on track.
 
@@ -19,6 +19,16 @@ https://github.com/user-attachments/assets/f3b23662-6473-4ac3-82f7-c7f9b64fa7c7
 ```
 
 Then start the conversation normally — the supervisor watches from outside without modifying the agent's context.
+
+The supervisor only sees the active goal, a recent slice of the conversation,
+the latest summary if one exists, and recent steering history. It does not
+inspect the repo or run tools itself.
+
+If you are not sure how to phrase the goal, ask the agent to draft one for you first. A good draft can be either:
+
+- a single high-signal line for simple work
+- a multi-line plain-language brief
+- a slightly longer structured brief with sub-goals, phases, priorities, or constraints
 
 1. **After each run** — a separate supervisor LLM analyzes the conversation against the goal (all sensitivities)
 2. **Mid-run, between tool calls** — also checks for drift on `medium` and `high` sensitivity and can steer the agent without waiting for it to finish
@@ -42,10 +52,10 @@ pi -e ~/projects/pi-supervisor/src/index.ts
 
 | Command | Description |
 |---|---|
-| `/supervise <outcome>` | Start supervising toward a desired outcome |
+| `/supervise <goal>` | Start supervising toward a desired goal |
 | `/supervise` or `/supervise settings` | Open the interactive settings panel |
 | `/supervise stop` | Stop active supervision |
-| `/supervise status` | Show current state (opens settings panel if active) |
+| `/supervise status` | Open current supervision settings when active |
 | `/supervise widget` | Toggle the status widget on/off |
 | `/supervise model` | Open the interactive model picker |
 | `/supervise model <provider/modelId>` | Set supervisor model directly |
@@ -56,6 +66,14 @@ pi -e ~/projects/pi-supervisor/src/index.ts
 ```
 /supervise Refactor the auth module to use dependency injection and add 90% test coverage
 
+# If you want help first, ask the agent to draft a goal.
+# For example: "Draft a supervision goal for fixing the hook runtime."
+
+# A simple drafted goal might be:
+/supervise Fix the hook runtime, keep the change minimal, and leave the supervision loop working cleanly
+
+# A longer drafted goal can be passed through the tool instead of typing it inline.
+
 /supervise model
 # Opens pi's model selector — pick any model with a configured API key
 
@@ -65,7 +83,14 @@ pi -e ~/projects/pi-supervisor/src/index.ts
 /supervise stop
 ```
 
-The agent can also initiate supervision itself by calling the `start_supervision` tool — useful when it recognises a task needs goal tracking. Once active, supervision is locked: only the user can change or stop it.
+The agent can also initiate supervision itself by calling the `start_supervision` tool with the goal text directly — useful when it recognises a task needs goal tracking. Once active, supervision is locked: only the user can change or stop it.
+
+That means a good workflow is often:
+
+1. ask the agent to draft a goal
+2. start with the highest-level goal on the first line
+3. keep it as a one-line goal if that is enough
+4. add sub-goals, phases, priorities, or constraints only when they help
 
 ## UI
 
@@ -76,7 +101,7 @@ Run `/supervise` (no args) or `/supervise settings` to open the interactive sett
 - **Model** — shows current model; press Enter to browse all available models
 - **Sensitivity** — cycle through `low`/`medium`/`high` with Enter or Space
 - **Widget** — toggle visibility
-- **Outcome** (when active) — shows goal, steer count, and turn count
+- **Goal** (when active) — shows goal, steer count, and turn count
 - **Stop** (when active) — stop supervision directly from the panel
 
 Navigate with arrow keys, Escape to close. Changes are applied on close.
@@ -104,7 +129,7 @@ The second line shows the supervisor's reasoning as it streams. Toggle the widge
 | `medium` (default) | End of run + every 3rd tool cycle mid-run | ≥ 0.90 | On clear drift |
 | `high` | End of run + every tool cycle mid-run | ≥ 0.85 | Proactively |
 
-**End-of-run** (`agent_end`): fires once per user prompt after the agent finishes and goes idle. The supervisor must decide `done`, `steer`, or `continue`.
+**End-of-run** (`agent_end`): fires once per user prompt after the agent finishes and goes idle. The supervisor must decide `done` or `steer`. Idle `continue` responses are converted into a steer so the run does not stall.
 
 **Mid-run** (`turn_end`): fires after each LLM tool-call cycle while the agent is still working. Steering is injected immediately (interrupting the current run) only when confidence exceeds the threshold. The agent has at least 2 sub-turns to settle before mid-run checks begin.
 
@@ -118,11 +143,13 @@ The supervisor runs on a **separate model** — it can be a cheaper/faster model
 3. Active chat model (`ctx.model`) — so it works out of the box with no configuration
 4. Built-in default: `anthropic/claude-haiku-4-5-20251001`
 
-Change at any time with `/supervise model` (interactive picker) or `/supervise model <provider/id>` (direct). The selection is saved to `.pi/supervisor-config.json` if the `.pi/` directory exists.
+Change at any time with `/supervise model` (interactive picker) or `/supervise model <provider/id>` (direct). If supervision is inactive, the new selection becomes the default for the next `/supervise`. The model is also saved to `.pi/supervisor-config.json` if the `.pi/` directory exists.
 
 ## Focus and Goal Discipline
 
 The supervisor is a pure outside observer — it does not modify the agent's system prompt. Goal discipline is enforced entirely through steering messages when the agent drifts. If the agent asks an out-of-scope clarifying question, the supervisor redirects it back to the goal rather than answering.
+
+In practice, the goal should read like a compact run brief, not a full spec. The full goal text is reused on every supervisor check, so it is fine for the goal to be a single line, a multi-line plain-language brief, or a short structured block. A good default is to start with the highest-level goal on the first line, then add sub-goals, phased steps, priorities, or constraints only when they genuinely help the supervisor judge progress and completion. If the wording is not obvious, ask the agent to draft a goal before starting supervision.
 
 ## Stagnation Detection
 
@@ -130,7 +157,7 @@ If the supervisor sends **5 consecutive steering messages** without declaring th
 
 ## Customizing the Supervisor: SUPERVISOR.md
 
-The supervisor's reasoning is controlled by its **system prompt** — not the goal. The goal is always set at runtime via `/supervise <outcome>`. `SUPERVISOR.md` defines *how* the supervisor thinks: its rules, persona, and project-specific constraints.
+The supervisor's reasoning is controlled by its **system prompt** — not the goal. The goal is always set at runtime via `/supervise <goal>`. `SUPERVISOR.md` defines *how* the supervisor thinks: its rules, persona, and project-specific constraints.
 
 **Discovery order** (mirrors pi's `SYSTEM.md` convention):
 
@@ -140,7 +167,7 @@ The supervisor's reasoning is controlled by its **system prompt** — not the go
 | 2 | `~/.pi/agent/SUPERVISOR.md` | Global personal rules |
 | 3 | Built-in template | Fallback |
 
-The active source is shown when you run `/supervise <outcome>` or `/supervise status`.
+The active source is shown when you start supervision with `/supervise <goal>`.
 
 ### Built-in system prompt
 

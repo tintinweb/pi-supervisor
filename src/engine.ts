@@ -229,7 +229,16 @@ export async function analyze(
   const userPrompt = buildUserPrompt(state, snapshot, agentIsIdle, stagnating, compactionSummary);
 
   try {
-    return await callSupervisorModel(ctx, state.provider, state.modelId, systemPrompt, userPrompt, signal, onDelta);
+    const decision = await callSupervisorModel(ctx, state.provider, state.modelId, systemPrompt, userPrompt, signal, onDelta);
+    if (agentIsIdle && decision.action === "continue") {
+      return {
+        action: "steer",
+        message: "Please continue working toward the goal.",
+        reasoning: decision.reasoning || "Idle continue converted to steer",
+        confidence: decision.confidence,
+      };
+    }
+    return decision;
   } catch {
     // When idle and analysis fails, nudge rather than silently do nothing
     return agentIsIdle
