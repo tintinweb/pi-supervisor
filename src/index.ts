@@ -1,10 +1,10 @@
 /**
- * pi-supervisor — A pi extension that supervises the chat and steers it toward a defined outcome.
+ * pi-supervisor — A pi extension that supervises the chat and steers it toward a defined goal.
  *
  * Commands:
- *   /supervise <outcome>          — start supervising
+ *   /supervise <goal>             — start supervising
  *   /supervise stop               — stop supervision
- *   /supervise status             — show current status widget
+ *   /supervise status             — open supervision settings when active
  *   /supervise model              — open interactive model picker (pi-style)
  *   /supervise model <p/modelId>  — set model directly (scripting)
  *   /supervise sensitivity <low|medium|high> — adjust steering sensitivity
@@ -45,6 +45,18 @@ export default function (pi: ExtensionAPI) {
   const state = new SupervisorStateManager(pi);
   let currentCtx: ExtensionContext | undefined;
   let idleSteers = 0; // consecutive agent_end steers; reset on done/stop/new supervision
+
+  const resolveDefaults = (ctx: ExtensionContext) => {
+    const prefs = state.getPrefs();
+    const workspaceModel = loadWorkspaceModel(ctx.cwd);
+    const sessionModel = ctx.model;
+
+    return {
+      provider: prefs.provider ?? workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER,
+      modelId: prefs.modelId ?? workspaceModel?.modelId ?? sessionModel?.id ?? DEFAULT_MODEL_ID,
+      sensitivity: prefs.sensitivity ?? DEFAULT_SENSITIVITY,
+    };
+  };
 
   // ---- Session lifecycle: restore state ----
 
@@ -136,7 +148,7 @@ export default function (pi: ExtensionAPI) {
       idleSteers = 0;
       updateUI(ctx, state.getState(), { type: "done" });
       const suffix = stagnating ? ` (stopped after ${MAX_IDLE_STEERS} steering attempts — goal substantially achieved)` : "";
-      ctx.ui.notify(`Supervisor: outcome achieved! "${s.outcome}"${suffix}`, "info");
+      ctx.ui.notify(`Supervisor: goal achieved! "${s.outcome}"${suffix}`, "info");
       state.stop();
       updateUI(ctx, state.getState());
     } else {
@@ -147,7 +159,7 @@ export default function (pi: ExtensionAPI) {
   // ---- /supervise command ----
 
   pi.registerCommand("supervise", {
-    description: "Supervise the chat toward a desired outcome (/supervise <outcome>)",
+    description: "Supervise the chat toward a desired goal (/supervise <goal>)",
     handler: async (args, ctx) => {
       currentCtx = ctx;
       const trimmed = args?.trim() ?? "";
@@ -177,17 +189,18 @@ export default function (pi: ExtensionAPI) {
 
       if (trimmed === "status") {
         const s = state.getState();
-        if (!s) {
-          ctx.ui.notify("No active supervision. Use /supervise <outcome> to start.", "info");
+        if (!s || !s.active) {
+          ctx.ui.notify("No active supervision. Use /supervise <goal> to start.", "info");
           return;
         }
         // Open the interactive settings panel (same as bare /supervise)
-        const result = await openSettings(ctx, s, DEFAULT_PROVIDER, DEFAULT_MODEL_ID, DEFAULT_SENSITIVITY);
+        const defaults = resolveDefaults(ctx);
+        const result = await openSettings(ctx, s, defaults.provider, defaults.modelId, defaults.sensitivity);
         if (result?.model) {
-          if (state.isActive()) state.setModel(result.model.provider, result.model.modelId);
+          state.setModel(result.model.provider, result.model.modelId);
           saveWorkspaceModel(ctx.cwd, result.model.provider, result.model.modelId);
         }
-        if (result?.sensitivity && state.isActive()) state.setSensitivity(result.sensitivity);
+        if (result?.sensitivity) state.setSensitivity(result.sensitivity);
         if (result?.widget !== undefined && result.widget !== isWidgetVisible()) toggleWidget();
         if (result?.action === "stop" && state.isActive()) { state.stop(); idleSteers = 0; }
         updateUI(ctx, state.getState());
@@ -200,19 +213,18 @@ export default function (pi: ExtensionAPI) {
         if (!spec) {
           // No args → open the interactive pi-style model picker
           const s = state.getState();
-          const picked = await pickModel(ctx, s?.provider, s?.modelId);
+          const defaults = resolveDefaults(ctx);
+          const picked = await pickModel(ctx, s?.provider ?? defaults.provider, s?.modelId ?? defaults.modelId);
           if (!picked) return; // user cancelled
 
           const provider = picked.provider;
           const modelId = picked.id;
 
-          if (state.isActive()) {
-            state.setModel(provider, modelId);
-            updateUI(ctx, state.getState());
-          }
+          state.setModel(provider, modelId);
+          if (state.isActive()) updateUI(ctx, state.getState());
           const saved = saveWorkspaceModel(ctx.cwd, provider, modelId);
           ctx.ui.notify(
-            `Supervisor model set to ${provider}/${modelId}${state.isActive() ? "" : " (takes effect on next /supervise)"}` +
+            `Supervisor model set to ${provider}/${modelId}${state.isActive() ? "" : " (default for the next /supervise)"}` +
               (saved ? " · saved to .pi/" : ""),
             "info"
           );
@@ -224,20 +236,18 @@ export default function (pi: ExtensionAPI) {
         let provider: string;
         let modelId: string;
         if (slashIdx === -1) {
-          provider = state.getState()?.provider ?? DEFAULT_PROVIDER;
+          provider = resolveDefaults(ctx).provider;
           modelId = spec;
         } else {
           provider = spec.slice(0, slashIdx);
           modelId = spec.slice(slashIdx + 1);
         }
 
-        if (state.isActive()) {
-          state.setModel(provider, modelId);
-          updateUI(ctx, state.getState());
-        }
+        state.setModel(provider, modelId);
+        if (state.isActive()) updateUI(ctx, state.getState());
         const saved = saveWorkspaceModel(ctx.cwd, provider, modelId);
         ctx.ui.notify(
-          `Supervisor model set to ${provider}/${modelId}${state.isActive() ? "" : " (takes effect on next /supervise)"}` +
+          `Supervisor model set to ${provider}/${modelId}${state.isActive() ? "" : " (default for the next /supervise)"}` +
             (saved ? " · saved to .pi/" : ""),
           "info"
         );
@@ -250,12 +260,12 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("Usage: /supervise sensitivity <low|medium|high>", "warning");
           return;
         }
-        if (!state.isActive()) {
-          ctx.ui.notify(`Sensitivity will be set to "${level}" on next /supervise.`, "info");
-        } else {
-          state.setSensitivity(level);
+        state.setSensitivity(level);
+        if (state.isActive()) {
           updateUI(ctx, state.getState());
           ctx.ui.notify(`Supervisor sensitivity set to "${level}"`, "info");
+        } else {
+          ctx.ui.notify(`Supervisor sensitivity set to "${level}" (default for the next /supervise).`, "info");
         }
         return;
       }
@@ -264,18 +274,17 @@ export default function (pi: ExtensionAPI) {
 
       if (!trimmed || trimmed === "settings") {
         const s = state.getState();
-        const result = await openSettings(ctx, s, DEFAULT_PROVIDER, DEFAULT_MODEL_ID, DEFAULT_SENSITIVITY);
+        const defaults = resolveDefaults(ctx);
+        const result = await openSettings(ctx, s, defaults.provider, defaults.modelId, defaults.sensitivity);
         if (!result) return; // user cancelled with no changes
 
         // Apply model change
         if (result.model) {
           const { provider: p, modelId: m } = result.model;
-          if (state.isActive()) {
-            state.setModel(p, m);
-          }
+          state.setModel(p, m);
           const saved = saveWorkspaceModel(ctx.cwd, p, m);
           ctx.ui.notify(
-            `Supervisor model set to ${p}/${m}${state.isActive() ? "" : " (takes effect on next /supervise)"}` +
+            `Supervisor model set to ${p}/${m}${state.isActive() ? "" : " (default for the next /supervise)"}` +
               (saved ? " · saved to .pi/" : ""),
             "info"
           );
@@ -283,10 +292,11 @@ export default function (pi: ExtensionAPI) {
 
         // Apply sensitivity change
         if (result.sensitivity) {
-          if (state.isActive()) {
-            state.setSensitivity(result.sensitivity);
-          }
-          ctx.ui.notify(`Supervisor sensitivity set to "${result.sensitivity}"`, "info");
+          state.setSensitivity(result.sensitivity);
+          ctx.ui.notify(
+            `Supervisor sensitivity set to "${result.sensitivity}"${state.isActive() ? "" : " (default for the next /supervise)"}`,
+            "info"
+          );
         }
 
         // Apply widget toggle
@@ -308,16 +318,14 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // Resolve model settings: session state → workspace config → active session model → built-in defaults
-      const existing = state.getState();
-      const workspaceModel = loadWorkspaceModel(ctx.cwd);
-      const sessionModel = ctx.model;
-      let provider = existing?.provider ?? workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER;
-      let modelId  = existing?.modelId  ?? workspaceModel?.modelId  ?? sessionModel?.id      ?? DEFAULT_MODEL_ID;
-      const sensitivity = existing?.sensitivity ?? DEFAULT_SENSITIVITY;
+      // Resolve default settings for the next run.
+      const defaults = resolveDefaults(ctx);
+      let provider = defaults.provider;
+      let modelId  = defaults.modelId;
+      const sensitivity = defaults.sensitivity;
 
       // Only prompt for a model if none has been configured yet
-      if (!existing) {
+      if (!state.getPrefs().provider && !state.getPrefs().modelId) {
         const apiKey = await ctx.modelRegistry.getApiKeyForProvider(provider);
         if (!apiKey) {
           ctx.ui.notify(`No API key for "${provider}/${modelId}" — pick a model with an available key.`, "warning");
@@ -347,13 +355,13 @@ export default function (pi: ExtensionAPI) {
     name: "start_supervision",
     label: "Start Supervision",
     description:
-      "Activate the supervisor to track the conversation toward a specific outcome. " +
+      "Activate the supervisor to track the conversation toward a specific goal. " +
       "The supervisor will observe every turn and steer the agent if it drifts. " +
       "Once supervision is active it is locked — only the user can change or stop it.",
     parameters: Type.Object({
       outcome: Type.String({
         description:
-          "The desired end-state to supervise toward. Be specific and measurable " +
+          "The goal text to supervise toward. Be specific and measurable " +
           "(e.g. 'Implement JWT auth with refresh tokens and full test coverage').",
       }),
       sensitivity: Type.Optional(Type.Union([
@@ -379,15 +387,16 @@ export default function (pi: ExtensionAPI) {
         const s = state.getState()!;
         return text(
           `Supervision is already active and cannot be changed by the model.\n` +
-          `Active outcome: "${s.outcome}"\n` +
+          `Active goal: "${s.outcome}"\n` +
           `Only the user can stop or modify supervision via /supervise.`
         );
       }
 
       // Resolve sensitivity
-      const sensitivity: Sensitivity = params.sensitivity ?? DEFAULT_SENSITIVITY;
+      const prefs = state.getPrefs();
+      const sensitivity: Sensitivity = params.sensitivity ?? prefs.sensitivity ?? DEFAULT_SENSITIVITY;
 
-      // Resolve model: tool param → workspace config → active session model → built-in default
+      // Resolve model: tool param → session prefs → workspace config → active session model → built-in default
       let provider: string;
       let modelId: string;
       if (params.model) {
@@ -397,8 +406,8 @@ export default function (pi: ExtensionAPI) {
       } else {
         const workspaceModel = loadWorkspaceModel(ctx.cwd);
         const sessionModel   = ctx.model;
-        provider = workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER;
-        modelId  = workspaceModel?.modelId  ?? sessionModel?.id      ?? DEFAULT_MODEL_ID;
+        provider = prefs.provider ?? workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER;
+        modelId  = prefs.modelId  ?? workspaceModel?.modelId  ?? sessionModel?.id      ?? DEFAULT_MODEL_ID;
       }
 
       state.start(params.outcome, provider, modelId, sensitivity);
@@ -415,7 +424,7 @@ export default function (pi: ExtensionAPI) {
         "info"
       );
 
-      return text(`Supervision active. Outcome: "${params.outcome}" | ${provider}/${modelId} | sensitivity: ${sensitivity}`);
+      return text(`Supervision active. Goal: "${params.outcome}" | ${provider}/${modelId} | sensitivity: ${sensitivity}`);
     },
   });
 }

@@ -13,6 +13,13 @@ export interface SupervisorIntervention {
   timestamp: number;
 }
 
+/** Session-scoped defaults for future supervision runs */
+export interface SupervisorPrefs {
+  provider?: string;
+  modelId?: string;
+  sensitivity?: Sensitivity;
+}
+
 /** Full supervisor state — persisted to session */
 export interface SupervisorState {
   active: boolean;

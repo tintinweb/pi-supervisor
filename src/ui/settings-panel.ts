@@ -96,7 +96,7 @@ export async function openSettings(
     if (isActive) {
       items.push({
         id: "outcome",
-        label: "Outcome",
+        label: "Goal",
         description: `Steers: ${state!.interventions.length} · Turns: ${state!.turnCount}`,
         currentValue: `"${state!.outcome.length > 60 ? state!.outcome.slice(0, 59) + "…" : state!.outcome}"`,
       });
