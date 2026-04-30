@@ -22,10 +22,12 @@
     "agent",
     "productivity"
   ],
+  "peerDependencies": {
+    "@mariozechner/pi-ai": ">=0.70.5",
+    "@mariozechner/pi-coding-agent": ">=0.70.5",
+    "@mariozechner/pi-tui": ">=0.70.5"
+  },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "latest",
-    "@mariozechner/pi-tui": "latest",
-    "@mariozechner/pi-ai": "latest",
     "@sinclair/typebox": "latest"
   },
   "devDependencies": {
