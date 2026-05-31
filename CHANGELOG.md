@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking**: pi runtime packages migrated from the `@mariozechner/*` scope to `@earendil-works/*`. Peer deps are now `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, with the floor raised to `>=0.74.0`. Import paths in `src/` updated accordingly.
 - CI now runs on Node 22 (was Node 20).
 
+### Added
+- End-to-end test suite for the extension entry point (`test/index.e2e.test.ts`, 19 tests) covering the `/supervise` command subcommands, the `start_supervision` tool (activation, model parsing, lock-once-active), and the steering loop: `agent_end` idle checkpoint (steer / done / failure-fallback / stagnation), `turn_end` mid-turn gating by sensitivity, and session restore. Drives the real extension against a mocked LLM boundary.
+
 ## [0.4.3] - 2026-05-04
 
 No user-facing behavior changes.
