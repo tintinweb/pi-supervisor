@@ -89,6 +89,8 @@ Initial release of `pi-supervisor`.
 - **Footer status** — always-visible one-liner showing outcome, model, and steer count while supervising
 - **Widget** — shows goal, model, and recent interventions above the editor
 
+[0.5.0]: https://github.com/tintinweb/pi-supervisor/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/tintinweb/pi-supervisor/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/tintinweb/pi-supervisor/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/tintinweb/pi-supervisor/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/tintinweb/pi-supervisor/compare/v0.3.0...v0.4.0
