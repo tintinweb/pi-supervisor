@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { callSupervisorModel } from "./model-client.js";
 import type { ConversationMessage, SteeringDecision, SupervisorState } from "./types.js";
 

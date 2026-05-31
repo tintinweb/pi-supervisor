@@ -1,7 +1,7 @@
 {
   "name": "pi-supervisor",
-  "version": "0.4.3",
-  "description": "A pi extension that supervises the chat and steers it towards a defined outcome",
+  "version": "0.5.0",
+  "description": "A goal oriented pi extension that supervises the chat and steers it towards a defined outcome",
   "author": "tintinweb",
   "license": "MIT",
   "repository": {
@@ -23,9 +23,9 @@
     "productivity"
   ],
   "peerDependencies": {
-    "@mariozechner/pi-ai": ">=0.70.5",
-    "@mariozechner/pi-coding-agent": ">=0.70.5",
-    "@mariozechner/pi-tui": ">=0.70.5"
+    "@earendil-works/pi-ai": ">=0.74.0",
+    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@earendil-works/pi-tui": ">=0.74.0"
   },
   "dependencies": {
     "typebox": "^1.1.24"
